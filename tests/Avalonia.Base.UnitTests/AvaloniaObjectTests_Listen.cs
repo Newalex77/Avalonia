@@ -14,7 +14,7 @@ namespace Avalonia.Base.UnitTests
     public class AvaloniaObjectTests_Listen
     {
         [Fact]
-        public void Listen_Returns_Initial_Value_Immediately()
+        public void Listen_Fires_With_Initial_Value_Immediately()
         {
             var target = new Class1();
             var raised = 0;
@@ -92,7 +92,7 @@ namespace Avalonia.Base.UnitTests
         }
 
         [Fact]
-        public void Listener_Returns_Property_Change_Only_For_Correct_Property()
+        public void Listener_Signals_Property_Change_Only_For_Correct_Property()
         {
             var target = new Class1();
             var result = new List<string>();
@@ -118,10 +118,48 @@ namespace Avalonia.Base.UnitTests
             Assert.False(raised);
         }
 
+        [Fact]
+        public void All_Property_Listen_Doesnt_Signal_Anything_Before_Property_Changes()
+        {
+            var target = new Class1();
+            var listener = new AllPropertyListener();
+
+            target.Listen(listener);
+
+            Assert.Empty(listener.Received);
+        }
+
+        [Fact]
+        public void All_Property_Listen_Fires_On_Property_Change()
+        {
+            var target = new Class1();
+            var listener = new AllPropertyListener();
+
+            target.Listen(listener);
+            target.SetValue(Class1.FooProperty, "newvalue");
+            target.SetValue(Class1.BarProperty, "baaa", BindingPriority.Style);
+
+            Assert.Equal(2, listener.Received.Count);
+
+            var change = Assert.IsType<AvaloniaPropertyChange<string>>(listener.Received[0]);
+            Assert.Equal("newvalue", change.NewValue.Value);
+            Assert.Equal("foodefault", change.OldValue.Value);
+            Assert.Equal(BindingPriority.LocalValue, change.Priority);
+            Assert.True(change.IsActiveValueChange);
+            Assert.False(change.IsOutdated);
+
+            change = Assert.IsType<AvaloniaPropertyChange<string>>(listener.Received[1]);
+            Assert.Equal("baaa", change.NewValue.Value);
+            Assert.Equal("bardefault", change.OldValue.Value);
+            Assert.Equal(BindingPriority.Style, change.Priority);
+            Assert.True(change.IsActiveValueChange);
+            Assert.False(change.IsOutdated);
+        }
+
         public class NoAnimation
         {
             [Fact]
-            public void Listen_Returns_Default_Value_Immediately_When_Only_Animated_Value_Present()
+            public void Listen_Initially_Fires_with_Default_Value_When_Only_Animated_Value_Present()
             {
                 var target = new Class1();
                 var raised = 0;
@@ -217,6 +255,56 @@ namespace Avalonia.Base.UnitTests
                     allChanges.Select(x => x.NewValue.Value).ToList());
                 Assert.True(allChanges.All(x => x.IsActiveValueChange));
             }
+
+            [Fact]
+            public void All_Property_Listener_Fires_Only_On_Non_Animated_Binding_Property_Changes()
+            {
+                var target = new Class1();
+                var allChanges = new AllPropertyListener();
+                var nonAnimatedChanges = new AllPropertyListener();
+                var style = new Subject<BindingValue<string>>();
+                var animation = new Subject<BindingValue<string>>();
+                var templatedParent = new Subject<BindingValue<string>>();
+
+                target.Bind(Class1.FooProperty, style, BindingPriority.Style);
+                target.Bind(Class1.FooProperty, animation, BindingPriority.Animation);
+                target.Bind(Class1.FooProperty, templatedParent, BindingPriority.TemplatedParent);
+
+                target.Listen(allChanges, true);
+                target.Listen(nonAnimatedChanges, false);
+
+                style.OnNext("style1");
+                templatedParent.OnNext("tp1");
+                animation.OnNext("a1");
+                templatedParent.OnNext("tp2");
+                templatedParent.OnCompleted();
+                animation.OnNext("a2");
+                style.OnNext("style2");
+                style.OnCompleted();
+                animation.OnCompleted();
+
+                Assert.Equal(
+                    new[] { "style1", "tp1", "tp2", "style1", "style2", "foodefault" },
+                    nonAnimatedChanges.Received
+                        .Cast<AvaloniaPropertyChange<string>>()
+                        .Select(x => x.NewValue.Value)
+                        .ToList());
+                Assert.Equal(
+                    new[] { true, true, false, false, false, false },
+                    nonAnimatedChanges.Received
+                        .Cast<AvaloniaPropertyChange<string>>()
+                        .Select(x => x.IsActiveValueChange)
+                        .ToList());
+                Assert.Equal(
+                    new[] { "style1", "tp1", "a1", "a2", "foodefault" },
+                    allChanges.Received
+                        .Cast<AvaloniaPropertyChange<string>>()
+                        .Select(x => x.NewValue.Value)
+                        .ToList());
+                Assert.True(allChanges.Received
+                    .Cast<AvaloniaPropertyChange<string>>()
+                    .All(x => x.IsActiveValueChange));
+            }
         }
 
         private class Class1 : AvaloniaObject
@@ -226,6 +314,16 @@ namespace Avalonia.Base.UnitTests
 
             public static readonly StyledProperty<string> BarProperty =
                 AvaloniaProperty.Register<Class1, string>("Bar", "bardefault");
+        }
+
+        private class AllPropertyListener : IAvaloniaPropertyListener
+        {
+            public List<object> Received { get; } = new List<object>();
+
+            public void PropertyChanged<T>(in AvaloniaPropertyChange<T> change)
+            {
+                Received.Add(change);
+            }
         }
     }
 }

@@ -26,6 +26,7 @@ namespace Avalonia
         private List<IAvaloniaObject> _inheritanceChildren;
         private ValueStore _values;
         private AvaloniaPropertyValueStore<object> _listeners;
+        private List<AllPropertyListener> _allPropertyListeners;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="AvaloniaObject"/> class.
@@ -359,6 +360,25 @@ namespace Avalonia
             var listener = AvaloniaPropertyObservable<T>.Create(this, property);
             _listeners.AddValue(property, listener);
             return listener.Get(includeAnimations);
+        }
+
+        /// <summary>
+        /// Adds a listener for all <see cref="AvaloniaProperty"/> value changes.
+        /// </summary>
+        /// <param name="listener">The listener.</param>
+        /// <param name="includeAnimations">
+        /// Whether to include property changes caused by animations.
+        /// </param>
+        public IDisposable Listen(
+            IAvaloniaPropertyListener listener,
+            bool includeAnimations = true)
+        {
+            listener = listener ?? throw new ArgumentNullException(nameof(listener));
+
+            var result = new AllPropertyListener(this, listener, includeAnimations);
+            _allPropertyListeners ??= new List<AllPropertyListener>();
+            _allPropertyListeners.Add(result);
+            return result;
         }
 
         /// <summary>
@@ -774,9 +794,27 @@ namespace Avalonia
                     change.Property.NotifyChanged(e);
                 }
 
-                if (_listeners != null && _listeners.TryGetValue(change.Property, out var listener))
+                if (_listeners is object && _listeners.TryGetValue(change.Property, out var listener))
                 {
                     ((AvaloniaPropertyObservable<T>)listener).Signal(change);
+                }
+
+                if (_allPropertyListeners is object)
+                {
+                    foreach (var entry in _allPropertyListeners)
+                    {
+                        if (entry.IncludeAnimations)
+                        {
+                            if (change.IsActiveValueChange)
+                            {
+                                entry.Listener.PropertyChanged(change);
+                            }
+                        }
+                        else if (change.Priority > BindingPriority.Animation)
+                        {
+                            entry.Listener.PropertyChanged(change);
+                        }
+                    }
                 }
 
                 _propertyChanged?.Invoke(this, e);
@@ -955,6 +993,26 @@ namespace Avalonia
                     Dispatcher.UIThread.Post(() => instance.SetDirectValueUnchecked(property, newValue));
                 }
             }
+        }
+
+        private class AllPropertyListener : IDisposable
+        {
+            private readonly AvaloniaObject _owner;
+
+            public AllPropertyListener(
+                AvaloniaObject owner,
+                IAvaloniaPropertyListener listener,
+                bool includeAnimations)
+            {
+                _owner = owner;
+                Listener = listener;
+                IncludeAnimations = includeAnimations;
+            }
+
+            public IAvaloniaPropertyListener Listener { get; }
+            public bool IncludeAnimations { get; }
+
+            public void Dispose() => _owner._allPropertyListeners.Remove(this);
         }
     }
 }
